@@ -31,11 +31,9 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000), // нет смысла держать в очереди больше задач, чем (rps системы оплаты * processingTimeMillis)
+        LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler() // вместо 30 минутного ожидания пока не появится ресурсы,
-                                                          // будем отменять выполнение потоков, которые ждут слишком долго, уступая дорогу "молодым"
-                                                          // система не придёт в стабильное состояние: "пришел запрос, подождал - фейл"
+        CallerBlockingRejectedExecutionHandler()
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {

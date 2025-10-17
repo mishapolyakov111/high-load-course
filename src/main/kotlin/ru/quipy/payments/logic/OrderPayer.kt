@@ -31,9 +31,9 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(330), // нет смысла держать в очереди больше задач, чем (rps системы оплаты * processingTimeMillis)
+        LinkedBlockingQueue(8_000), // нет смысла держать в очереди больше задач, чем (rps системы оплаты * processingTimeMillis)
         NamedThreadFactory("payment-submission-executor"),
-        ThreadPoolExecutor.DiscardOldestPolicy() // вместо 30 минутного ожидания пока не появится ресурсы,
+        CallerBlockingRejectedExecutionHandler() // вместо 30 минутного ожидания пока не появится ресурсы,
                                                           // будем отменять выполнение потоков, которые ждут слишком долго, уступая дорогу "молодым"
                                                           // система не придёт в стабильное состояние: "пришел запрос, подождал - фейл"
     )

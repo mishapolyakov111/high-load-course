@@ -1,23 +1,24 @@
 параметры системы оплаты:
 
-PaymentAccountProperties(serviceName=m3402-SkibidiToilets, accountName=acc-7, parallelRequests=50, rateLimitPerSec=8, price=30, averageProcessingTime=PT1.2S, enabled=true)
+PaymentAccountProperties(serviceName=m3402-SkibidiToilets, accountName=acc-9, parallelRequests=50, rateLimitPerSec=120, price=30, averageProcessingTime=PT0.5S, enabled=true)
 
 Результаты:
+![img.png](фото/img.png)
 ![img.png](фото/img_1.png)
 ![img.png](фото/img_2.png)
-
-График длительности запросов по перцентилям **ДО** добавления таймаута в OkHttpClient:
 ![img.png](фото/img_3.png)
 
-Видим что около 90% запросов выполняются менее чем за 1.2 секундры => неоптимальное использование ресурсов. Добавим в http клиент таймаут 1.5 с. Люой запрос, который исполняется более - прерываем и обрабатываем ошибку. Ретраим по возможности. 
+Доработки:
 
-График длительности запросов по перцентилям **ПОСЛЕ** добавления таймаута в OkHttpClient:
-![img.png](фото/img.png)
+Размер тредпула выставляем из следующих соображений:
+производительность одного потока = 1 / время обработки одного запроса = 1 / 0.5 = 2
 
-Все запросы исполняются менее чем за 1.2 секунды
+Это значит, что 1 поток способен дать нам 2 rps, а чтобы добиться запрашиваемых 100 rps, нам нужно 50 таких потоков
 
-В условии кейса так же просят метрику ретраев. Сделали такую:
+```kotlin
+fun calcPoolSize(): Int {
+    val requestedRps = 100
+    val singleThreadPerfomance = 1 / 0.5 // 1 / averageProcessingTime
+    return (requestedRps / singleThreadPerfomance).toInt()
+}
 ```
-rate(payments_retries_total[30s])
-```
-![img.png](фото/img_4.png)

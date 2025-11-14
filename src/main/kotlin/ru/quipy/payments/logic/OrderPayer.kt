@@ -31,9 +31,9 @@ class OrderPayer {
         50,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(2000),
+        LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
-        ThreadPoolExecutor.DiscardOldestPolicy() // даём дорогу молодым потокам
+        CallerBlockingRejectedExecutionHandler()
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {

@@ -42,7 +42,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().callTimeout((requestAverageProcessingTime.toMillis() * 1.5).toLong(), TimeUnit.MILLISECONDS).build()
+    private val client = OkHttpClient.Builder().callTimeout((requestAverageProcessingTime.toMillis() * 2), TimeUnit.MILLISECONDS).build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
 

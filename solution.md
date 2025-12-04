@@ -1,24 +1,18 @@
-параметры системы оплаты:
+параметры системы оплаты (acc-12):
 
-PaymentAccountProperties(serviceName=m3402-SkibidiToilets, accountName=acc-9, parallelRequests=50, rateLimitPerSec=120, price=30, averageProcessingTime=PT0.5S, enabled=true)
+PaymentAccountProperties(
+    serviceName=m3402-SkibidiToilets,
+    accountName=acc-12,
+    parallelRequests=20000,
+    rateLimitPerSec=1100,
+    price=30,
+    averageProcessingTime=PT10S,
+    enabled=true)
 
-Результаты:
-![img.png](фото/img.png)
-![img.png](фото/img_1.png)
-![img.png](фото/img_2.png)
-![img.png](фото/img_3.png)
 
-Доработки:
-
-Размер тредпула выставляем из следующих соображений:
-производительность одного потока = 1 / время обработки одного запроса = 1 / 0.5 = 2
-
-Это значит, что 1 поток способен дать нам 2 rps, а чтобы добиться запрашиваемых 100 rps, нам нужно 50 таких потоков
-
-```kotlin
-fun calcPoolSize(): Int {
-    val requestedRps = 100
-    val singleThreadPerfomance = 1 / 0.5 // 1 / averageProcessingTime
-    return (requestedRps / singleThreadPerfomance).toInt()
+Тест:
+{
+    "ratePerSecond": 1000,
+    "testCount": 200000,
+    "processingTimeMillis": 50000
 }
-```

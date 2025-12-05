@@ -14,8 +14,11 @@ import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
+import java.net.http.HttpClient
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
@@ -42,7 +45,12 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().callTimeout((requestAverageProcessingTime.toMillis() * 2), TimeUnit.MILLISECONDS).build()
+    private val client = HttpClient
+        .newBuilder()
+        .version(HttpClient.Version.HTTP_2)
+        .executor(Executors.newFixedThreadPool(2000))
+        .connectTimeout(Duration.ofMillis(500))
+        .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
 
@@ -68,7 +76,7 @@ class PaymentExternalSystemAdapterImpl(
     private val maxDelay = 1000L
     private val baseDelay = 200L
 
-    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+    override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
         submittedCounter.increment()
         val transactionId = UUID.randomUUID()

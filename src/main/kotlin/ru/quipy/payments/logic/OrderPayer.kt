@@ -59,7 +59,7 @@ class OrderPayer {
 
     fun calcPoolSize(): Int {
         val requestedRps = 1000
-        val singleThreadPerfomance = 1 / 10 // 1 / averageProcessingTime
+        val singleThreadPerfomance = 1 / 10.0 // 1 / averageProcessingTime
         return (requestedRps / singleThreadPerfomance).toInt()
     }
 }

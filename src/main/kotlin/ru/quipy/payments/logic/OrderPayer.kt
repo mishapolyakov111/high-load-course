@@ -30,13 +30,13 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        calcPoolSize(),
-        calcPoolSize(),
-        0L,
+        100,
+        1200,
+        70000,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8000),
+        LinkedBlockingQueue(20000),
         NamedThreadFactory("payment-submission-executor"),
-        ThreadPoolExecutor.DiscardOldestPolicy()
+        CallerBlockingRejectedExecutionHandler()
     )
     val executorScope = CoroutineScope(paymentExecutor.asCoroutineDispatcher())
 

@@ -2,7 +2,6 @@ package ru.quipy.apigateway
 
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
-import io.prometheus.metrics.core.metrics.SlidingWindow
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -74,20 +73,21 @@ class APIController(@Autowired meterRegistry: MeterRegistry) {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long):  ResponseEntity<PaymentSubmissionDto> {
-        orderCounter.increment()
-        if (!rateLimiter.tick()) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build()
-        }
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+        try {
+            val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+            return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+        } catch(_: Exception) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", "1")
+                .build()
+        }
     }
 
     class PaymentSubmissionDto(

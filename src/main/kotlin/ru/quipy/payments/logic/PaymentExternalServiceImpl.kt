@@ -89,7 +89,6 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-//        ongoingWindow.acquire()
         if (!waitRateLimitOrTimeout(deadline)) {
             logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
             paymentESService.update(paymentId) {

@@ -44,22 +44,12 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
         executorScope.launch {
             val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
+                it.create(paymentId, orderId, amount)
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
         return createdAt
-    }
-
-    fun calcPoolSize(): Int {
-        val requestedRps = 1000
-        val singleThreadPerfomance = 1 / 10.0 // 1 / averageProcessingTime
-        return (requestedRps / singleThreadPerfomance).toInt()
     }
 }

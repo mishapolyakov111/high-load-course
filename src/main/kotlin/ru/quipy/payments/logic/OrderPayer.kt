@@ -34,7 +34,7 @@ class OrderPayer {
         100,
         70000,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(3000),
+        LinkedBlockingQueue(2000),
         NamedThreadFactory("payment-submission-executor"),
         ThreadPoolExecutor.DiscardOldestPolicy()
     )
@@ -42,10 +42,6 @@ class OrderPayer {
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        if (paymentExecutor.queue.size >= 2800) {
-            throw IllegalStateException("Payment queue is full")  // ловится в контроллере → 429
-        }
-
         executorScope.launch {
             if (now() >= deadline) {
                 logger.warn("Payment $paymentId deadline already exceeded, skipping")

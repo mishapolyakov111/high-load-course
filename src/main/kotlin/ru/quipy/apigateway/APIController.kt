@@ -17,9 +17,11 @@ import java.util.*
 @RestController
 class APIController(@Autowired meterRegistry: MeterRegistry) {
 
-    private val rateLimitPerSec = 2000
+    private val rateLimitPerSec = 4500
     private val processingTimeSec = 10
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
+    private val rateLimitedCounter: Counter = Counter.builder("http_requests_rate_limited")
+        .register(meterRegistry)
     private val rateLimiter = LeakingBucketRateLimiter(
         rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
@@ -77,6 +79,8 @@ class APIController(@Autowired meterRegistry: MeterRegistry) {
         val paymentId = UUID.randomUUID()
 
         if (!rateLimiter.tick()) {
+            rateLimitedCounter.increment()
+            logger.warn("Rate limited request for order $orderId, total dropped: ${rateLimitedCounter.count().toLong()}")
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "1")
                 .build()
@@ -91,6 +95,7 @@ class APIController(@Autowired meterRegistry: MeterRegistry) {
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch(_: Exception) {
+            logger.error("Exception in processPayment for order $orderId")
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "1")
                 .build()

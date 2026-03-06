@@ -75,8 +75,8 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     private val retryCount = 3
-    private val maxDelay = 1000L
-    private val baseDelay = 200L
+    private val maxDelay = 500L
+    private val baseDelay = 100L
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")

@@ -74,7 +74,7 @@ class PaymentExternalSystemAdapterImpl(
         return true
     }
 
-    private val retryCount = 2
+    private val retryCount = 1
     private val maxDelay = 10L
     private val baseDelay = 50L
 

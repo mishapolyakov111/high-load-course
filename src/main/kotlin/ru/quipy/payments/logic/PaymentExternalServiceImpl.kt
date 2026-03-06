@@ -74,9 +74,9 @@ class PaymentExternalSystemAdapterImpl(
         return true
     }
 
-    private val retryCount = 3
-    private val maxDelay = 500L
-    private val baseDelay = 100L
+    private val retryCount = 2
+    private val maxDelay = 10L
+    private val baseDelay = 50L
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -90,13 +90,13 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
 //        ongoingWindow.acquire()
-        if (!waitRateLimitOrTimeout(deadline)) {
-            logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
+//        if (!waitRateLimitOrTimeout(deadline)) {
+//            logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
 //            paymentESService.update(paymentId) {
 //                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
 //            }
-            return
-        }
+//            return
+//        }
 
         val request = HttpRequest.newBuilder().uri(
             URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))

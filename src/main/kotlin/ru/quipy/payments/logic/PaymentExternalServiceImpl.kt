@@ -50,8 +50,8 @@ class PaymentExternalSystemAdapterImpl(
     private val client = HttpClient
         .newBuilder()
         .version(HttpClient.Version.HTTP_2)
-        .executor(Executors.newFixedThreadPool(100))
-        .connectTimeout(Duration.ofMillis(500))
+        .executor(Executors.newFixedThreadPool(400))
+        .connectTimeout(Duration.ofMillis(150))
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
@@ -69,7 +69,7 @@ class PaymentExternalSystemAdapterImpl(
     private suspend fun waitRateLimitOrTimeout(deadline: Long): Boolean {
         while (!rateLimiter.tick()) {
             if (now() >= deadline) return false
-            delay(5)
+            delay(2)
         }
         return true
     }
@@ -92,9 +92,9 @@ class PaymentExternalSystemAdapterImpl(
 //        ongoingWindow.acquire()
         if (!waitRateLimitOrTimeout(deadline)) {
             logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
-            }
+//            paymentESService.update(paymentId) {
+//                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
+//            }
             return
         }
 

@@ -50,7 +50,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = HttpClient
         .newBuilder()
         .version(HttpClient.Version.HTTP_2)
-        .executor(Executors.newFixedThreadPool(500))
+        .executor(Executors.newFixedThreadPool(2500))
         .connectTimeout(Duration.ofMillis(150))
         .build()
 

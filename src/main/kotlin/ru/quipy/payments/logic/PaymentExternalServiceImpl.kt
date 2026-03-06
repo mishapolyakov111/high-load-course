@@ -5,8 +5,10 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -114,8 +116,13 @@ class PaymentExternalSystemAdapterImpl(
                 if (remainingTime <= 50) break
 
                 val start = System.currentTimeMillis()
+//                val response = withTimeoutOrNull(remainingTime) {
+//                    client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+//                }
                 val response = withTimeoutOrNull(remainingTime) {
-                    client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                    withContext(Dispatchers.IO) {
+                        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                    }
                 }
 
                 if (response == null) {

@@ -34,7 +34,7 @@ class OrderPayer {
         100,
         70000,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(5000),
+        LinkedBlockingQueue(1000),
         NamedThreadFactory("payment-submission-executor"),
         ThreadPoolExecutor.DiscardOldestPolicy()
     )

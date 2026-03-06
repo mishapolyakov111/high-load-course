@@ -92,7 +92,8 @@ class PaymentExternalSystemAdapterImpl(
 //            paymentESService.update(paymentId) {
 //                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
 //            }
-            throw RuntimeException("Ongoing window timeout.")
+//            throw RuntimeException("Ongoing window timeout.")
+            return
         }
 
         ongoingWindow.acquire()

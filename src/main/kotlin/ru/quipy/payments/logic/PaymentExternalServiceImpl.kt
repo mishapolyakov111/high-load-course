@@ -50,8 +50,8 @@ class PaymentExternalSystemAdapterImpl(
     private val client = HttpClient
         .newBuilder()
         .version(HttpClient.Version.HTTP_2)
-        .executor(Executors.newFixedThreadPool(400))
-        .connectTimeout(Duration.ofMillis(150))
+        .executor(Executors.newFixedThreadPool(50))
+        .connectTimeout(Duration.ofMillis(50))
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
@@ -111,7 +111,7 @@ class PaymentExternalSystemAdapterImpl(
 
             try {
                 val remainingTime = deadline - now()
-                if (remainingTime <= 0) break
+                if (remainingTime <= 50) break
 
                 val start = System.currentTimeMillis()
                 val response = withTimeoutOrNull(remainingTime) {

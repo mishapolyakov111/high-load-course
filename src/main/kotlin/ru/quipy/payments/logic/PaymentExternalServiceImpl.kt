@@ -87,17 +87,21 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        if (!ongoingWindow.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)) {
+        if (!waitRateLimitOrTimeout(deadline)) {
             logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
-//            paymentESService.update(paymentId) {
-//                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
-//            }
-//            throw RuntimeException("Ongoing window timeout.")
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
+            }
             return
         }
 
-        ongoingWindow.acquire()
-
+        if (!ongoingWindow.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)) {
+            logger.error("[$accountName] Ongoing window timeout for txId: $transactionId, payment: $paymentId")
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Ongoing window timeout.")
+            }
+            return
+        }
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         val request = HttpRequest.newBuilder().uri(

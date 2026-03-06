@@ -22,6 +22,7 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
 
@@ -49,8 +50,8 @@ class PaymentExternalSystemAdapterImpl(
     private val client = HttpClient
         .newBuilder()
         .version(HttpClient.Version.HTTP_2)
-        .executor(Executors.newFixedThreadPool(100))
-        .connectTimeout(Duration.ofMillis(500))
+        .executor(Executors.newFixedThreadPool(500))
+        .connectTimeout(Duration.ofMillis(150))
         .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
@@ -86,12 +87,12 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        if (!waitRateLimitOrTimeout(deadline)) {
+        if (!ongoingWindow.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)) {
             logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
-            }
-            return
+//            paymentESService.update(paymentId) {
+//                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
+//            }
+            throw RuntimeException("Ongoing window timeout.")
         }
 
         ongoingWindow.acquire()

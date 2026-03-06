@@ -43,6 +43,11 @@ class OrderPayer {
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         executorScope.launch {
+            if (now() >= deadline) {
+                logger.warn("Payment $paymentId deadline already exceeded, skipping")
+                return@launch
+            }
+
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,

@@ -43,7 +43,7 @@ class OrderPayer {
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
         if (paymentExecutor.queue.size >= 2800) {
-            throw IllegalStateException("Payment queue is full")  // ловится в контроллере → 429
+            throw IllegalStateException("Payment queue is full")
         }
 
         executorScope.launch {

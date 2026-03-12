@@ -94,116 +94,104 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        ongoingWindow.acquire()
-        if (!waitRateLimitOrTimeout(deadline)) {
-            logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
-            }
-            return
-        }
+//        ongoingWindow.acquire()
+//        if (!waitRateLimitOrTimeout(deadline)) {
+//            logger.error("[$accountName] Rate limit wait exceeded deadline for txId: $transactionId, payment: $paymentId")
+//            paymentESService.update(paymentId) {
+//                it.logProcessing(false, now(), transactionId, reason = "Rate limit wait exceeded deadline.")
+//            }
+//            return
+//        }
 
-        try {
-            val request = HttpRequest.newBuilder().uri(
-                URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
-            )
-                .POST(HttpRequest.BodyPublishers.noBody())
-                .build()
+        val request = HttpRequest.newBuilder().uri(
+            URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build()
 
-            var attempt = 0
-            var processed = false
+        var attempt = 0
+        var processed = false
 
-            while (!processed && attempt < retryCount && now() < deadline) {
-                attempt++
+        while (!processed && attempt < retryCount && now() < deadline) {
+            attempt++
 
-                try {
-                    val remainingTime = deadline - now()
-                    if (remainingTime <= 50) break
+            try {
+                val remainingTime = deadline - now()
+                if (remainingTime <= 50) break
 
-                    val start = System.currentTimeMillis()
-                    val response = withTimeoutOrNull(remainingTime) {
-                        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-                    }
+                val start = System.currentTimeMillis()
+                val response = withTimeoutOrNull(remainingTime) {
+                    client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                }
 
-                    if (response == null) {
-                        logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
-                        if (attempt >= retryCount || now() >= deadline) {
-                            dbScope.launch {
-                                paymentESService.update(paymentId) {
-                                    it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
-                                }
-                            }
-                            processed = true
-                        }
-                        continue
-                    }
-
-                    val latency = (System.currentTimeMillis() - start).toDouble()
-                    requestLatency.record(latency)
-
-                    val body = try {
-                        mapper.readValue(response.body(), ExternalSysResponse::class.java)
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
-                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
-                    }
-
-                    logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-
-                    if (body.result) {
-                        sentQueriesSuccess.increment()
+                if (response == null) {
+                    logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
+                    if (attempt >= retryCount || now() >= deadline) {
                         dbScope.launch {
                             paymentESService.update(paymentId) {
-                                it.logProcessing(true, now(), transactionId, reason = body.message)
-                            }
-                        }
-                        processed = true
-                    } else if (body.message == "Temporary error" && attempt < retryCount && now() < deadline) {
-                        retryCounter.increment()
-                        delay(exponentialBackoffDelay(attempt))
-                    } else {
-                        dbScope.launch {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(false, now(), transactionId, reason = body.message)
+                                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                             }
                         }
                         processed = true
                     }
+                    continue
+                }
 
+                val latency = (System.currentTimeMillis() - start).toDouble()
+                requestLatency.record(latency)
+
+                val body = try {
+                    mapper.readValue(response.body(), ExternalSysResponse::class.java)
                 } catch (e: Exception) {
-                    when (e.cause) {
-                        is SocketTimeoutException -> {
-                            logger.error(
-                                "[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId",
-                                e
-                            )
-                        }
+                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.statusCode()}, reason: ${response.body()}")
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
+                }
 
-                        else -> {
-                            logger.error(
-                                "[$accountName] Payment failed for txId: $transactionId, payment: $paymentId",
-                                e
-                            )
-                        }
-                    }
+                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+
+                if (body.result) {
+                    sentQueriesSuccess.increment()
                     dbScope.launch {
                         paymentESService.update(paymentId) {
-                            it.logProcessing(false, now(), transactionId, reason = e.message)
+                            it.logProcessing(true, now(), transactionId, reason = body.message)
+                        }
+                    }
+                    processed = true
+                } else if (body.message == "Temporary error" && attempt < retryCount && now() < deadline) {
+                    retryCounter.increment()
+                    delay(exponentialBackoffDelay(attempt))
+                } else {
+                    dbScope.launch {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason = body.message)
                         }
                     }
                     processed = true
                 }
-            }
 
-            if (!processed) {
-                dbScope.launch {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded.")
+            } catch (e: Exception) {
+                when (e.cause) {
+                    is SocketTimeoutException -> {
+                        logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                    }
+                    else -> {
+                        logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     }
                 }
+                dbScope.launch {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = e.message)
+                    }
+                }
+                processed = true
             }
-        } finally {
-            ongoingWindow.release()
+        }
+
+        if (!processed) {
+            dbScope.launch {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded.")
+                }
+            }
         }
     }
 

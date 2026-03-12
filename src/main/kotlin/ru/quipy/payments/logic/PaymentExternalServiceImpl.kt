@@ -5,8 +5,10 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -25,13 +27,13 @@ import java.util.concurrent.Executors
 import kotlin.math.pow
 
 
-// Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
-    meterRegistry: MeterRegistry
+    meterRegistry: MeterRegistry,
+    private val dbScope: CoroutineScope
 ) : PaymentExternalSystemAdapter {
 
     companion object {
@@ -83,8 +85,11 @@ class PaymentExternalSystemAdapterImpl(
         submittedCounter.increment()
         val transactionId = UUID.randomUUID()
 
-        paymentESService.update(paymentId) {
-            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+        val submittedAt = now()
+        dbScope.launch {
+            paymentESService.update(paymentId) {
+                it.logSubmission(success = true, transactionId, submittedAt, Duration.ofMillis(submittedAt - paymentStartedAt))
+            }
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
@@ -121,8 +126,10 @@ class PaymentExternalSystemAdapterImpl(
                 if (response == null) {
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
                     if (attempt >= retryCount || now() >= deadline) {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                        dbScope.launch {
+                            paymentESService.update(paymentId) {
+                                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+                            }
                         }
                         processed = true
                     }
@@ -143,16 +150,20 @@ class PaymentExternalSystemAdapterImpl(
 
                 if (body.result) {
                     sentQueriesSuccess.increment()
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(true, now(), transactionId, reason = body.message)
+                    dbScope.launch {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(true, now(), transactionId, reason = body.message)
+                        }
                     }
                     processed = true
                 } else if (body.message == "Temporary error" && attempt < retryCount && now() < deadline) {
                     retryCounter.increment()
                     delay(exponentialBackoffDelay(attempt))
                 } else {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = body.message)
+                    dbScope.launch {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason = body.message)
+                        }
                     }
                     processed = true
                 }
@@ -166,19 +177,22 @@ class PaymentExternalSystemAdapterImpl(
                         logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     }
                 }
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, reason = e.message)
+                dbScope.launch {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = e.message)
+                    }
                 }
                 processed = true
             }
         }
 
         if (!processed) {
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded.")
+            dbScope.launch {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Deadline exceeded.")
+                }
             }
         }
-
     }
 
     override fun price() = properties.price

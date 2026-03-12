@@ -9,10 +9,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -56,7 +57,7 @@ class PaymentExternalSystemAdapterImpl(
         .connectTimeout(Duration.ofMillis(50))
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
-    private val ongoingWindow = OngoingWindow(parallelRequests)
+    private val semaphore = Semaphore(parallelRequests)
 
     private val submittedCounter = Counter.builder("payments_submitted_total").register(meterRegistry)
     private val sentQueriesSuccess = Counter.builder("payments_success").register(meterRegistry)
@@ -104,8 +105,6 @@ class PaymentExternalSystemAdapterImpl(
             return
         }
 
-        ongoingWindow.acquire()
-
         val request = HttpRequest.newBuilder().uri(
             URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
             .POST(HttpRequest.BodyPublishers.noBody())
@@ -114,7 +113,7 @@ class PaymentExternalSystemAdapterImpl(
         var attempt = 0
         var processed = false
 
-        try {
+        semaphore.withPermit {
             while (!processed && attempt < retryCount && now() < deadline) {
                 attempt++
 
@@ -193,8 +192,6 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
-        } finally {
-            ongoingWindow.release()  // гарантированно освобождаем слот
         }
     }
 

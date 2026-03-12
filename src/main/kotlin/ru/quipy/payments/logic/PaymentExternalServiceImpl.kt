@@ -5,8 +5,13 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -21,6 +26,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
@@ -50,7 +56,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = HttpClient
         .newBuilder()
         .version(HttpClient.Version.HTTP_2)
-        .executor(Executors.newFixedThreadPool(2500))
+        .executor(Executors.newFixedThreadPool(128))
         .connectTimeout(Duration.ofMillis(150))
         .build()
 
@@ -59,7 +65,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val submittedCounter = Counter.builder("payments_submitted_total").register(meterRegistry)
     private val sentQueriesSuccess = Counter.builder("payments_success").register(meterRegistry)
-    private val retryCounter = Counter.builder("payments_retries_total").register(meterRegistry)
+    private val retryCounter = Counter.builder("payments_hedge_total").register(meterRegistry)
 
     private val requestLatency = DistributionSummary.builder("request_latency")
         .description("Request latency.")
@@ -77,6 +83,9 @@ class PaymentExternalSystemAdapterImpl(
     private val retryCount = 3
     private val maxDelay = 1000L
     private val baseDelay = 200L
+    private val hedgeCount = 3
+    private val hedgeDelay = 100L
+    private val requestTimeout = 1500L
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -106,11 +115,16 @@ class PaymentExternalSystemAdapterImpl(
 
         val request = HttpRequest.newBuilder().uri(
             URI("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"))
+            .header("x-idempotency-key", transactionId.toString())
+            .timeout(Duration.ofMillis(requestTimeout))
             .POST(HttpRequest.BodyPublishers.noBody())
             .build()
 
         var attempt = 0
         var processed = false
+
+        val futures = mutableListOf<CompletableFuture<HttpResponse<String>>>()
+        futures.add(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
 
         try {
             while (!processed && attempt < retryCount && now() < deadline) {
@@ -121,9 +135,13 @@ class PaymentExternalSystemAdapterImpl(
                     if (remainingTime <= 0) break
 
                     val start = System.currentTimeMillis()
-                    val response = withTimeoutOrNull(remainingTime) {
-                        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-                    }
+                    val response = hedgedRequest(
+                        client = client,
+                        request = request,
+                        hedgeCount = hedgeCount,
+                        hedgeDelayMs = hedgeDelay,
+                        timeoutMs = remainingTime
+                    )
 
                     if (response == null) {
                         logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
@@ -198,6 +216,40 @@ class PaymentExternalSystemAdapterImpl(
 
     private fun exponentialBackoffDelay(attempt: Int): Long {
         return minOf((baseDelay * 2.0.pow((attempt - 1).toDouble())).toLong(), maxDelay)
+    }
+
+    suspend fun hedgedRequest(
+        client: HttpClient,
+        request: HttpRequest,
+        hedgeCount: Int,
+        hedgeDelayMs: Long,
+        timeoutMs: Long
+    ): HttpResponse<String>? = coroutineScope {
+        val winner = CompletableDeferred<HttpResponse<String>?>()
+
+        val jobs = (0 until hedgeCount).map { hedgeIndex ->
+            async(Dispatchers.IO) {
+                delay(hedgeIndex * hedgeDelayMs)
+
+                if (winner.isCompleted) return@async
+
+                try {
+                    val response = withTimeout(timeoutMs) {
+                        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                    }
+                    winner.complete(response)
+                } catch (e: Exception) {
+                    if (hedgeIndex == hedgeCount - 1 && !winner.isCompleted) {
+                        winner.complete(null)
+                    }
+                }
+            }
+        }
+        val result = withTimeoutOrNull(timeoutMs) {
+            winner.await()
+        }
+        jobs.forEach { it.cancel() }
+        result
     }
 }
 

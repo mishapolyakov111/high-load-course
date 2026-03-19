@@ -2,6 +2,8 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
@@ -63,6 +65,16 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
     private val ongoingWindow = OngoingWindow(parallelRequests)
 
+    private val circuitBreakerConfig = CircuitBreakerConfig.custom()
+        .failureRateThreshold(8F)
+        .slowCallRateThreshold(8F)
+        .waitDurationInOpenState(Duration.ofSeconds(10))
+        .slowCallDurationThreshold(Duration.ofSeconds(1))
+        .permittedNumberOfCallsInHalfOpenState(40)
+        .build()
+
+    private val circuitBreaker = CircuitBreaker.of("paymentService", circuitBreakerConfig)
+
     private val submittedCounter = Counter.builder("payments_submitted_total").register(meterRegistry)
     private val sentQueriesSuccess = Counter.builder("payments_success").register(meterRegistry)
     private val retryCounter = Counter.builder("payments_hedge_total").register(meterRegistry)
@@ -111,6 +123,16 @@ class PaymentExternalSystemAdapterImpl(
             }
             return
         }
+
+        if (!circuitBreaker.tryAcquirePermission()) {
+            logger.error("[$accountName] Circuit breaker is open for txId: $transactionId, payment: $paymentId")
+            ongoingWindow.release()
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Circuit breaker is open.")
+            }
+            return
+        }
+
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         val request = HttpRequest.newBuilder().uri(
@@ -146,6 +168,7 @@ class PaymentExternalSystemAdapterImpl(
                     if (response == null) {
                         logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
                         if (attempt >= retryCount || now() >= deadline) {
+                            circuitBreaker.onError(remainingTime, TimeUnit.MILLISECONDS, Exception("Request timeout"))
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                             }
@@ -167,15 +190,18 @@ class PaymentExternalSystemAdapterImpl(
                     logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
 
                     if (body.result) {
+                        circuitBreaker.onSuccess(latency.toLong(), TimeUnit.MILLISECONDS)
                         sentQueriesSuccess.increment()
                         paymentESService.update(paymentId) {
                             it.logProcessing(true, now(), transactionId, reason = body.message)
                         }
                         processed = true
                     } else if (body.message == "Temporary error" && attempt < retryCount && now() < deadline) {
+                        circuitBreaker.onError(latency.toLong(), TimeUnit.MILLISECONDS, Exception(body.message))
                         retryCounter.increment()
                         delay(exponentialBackoffDelay(attempt))
                     } else {
+                        circuitBreaker.onError(latency.toLong(), TimeUnit.MILLISECONDS, Exception(body.message))
                         paymentESService.update(paymentId) {
                             it.logProcessing(false, now(), transactionId, reason = body.message)
                         }
@@ -183,6 +209,7 @@ class PaymentExternalSystemAdapterImpl(
                     }
 
                 } catch (e: Exception) {
+                    circuitBreaker.onError(0, TimeUnit.MILLISECONDS, e)
                     when (e.cause) {
                         is SocketTimeoutException -> {
                             logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)

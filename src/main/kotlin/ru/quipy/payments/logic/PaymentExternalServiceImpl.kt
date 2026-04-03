@@ -59,12 +59,12 @@ class PaymentExternalSystemAdapterImpl(
     private val ongoingWindow = OngoingWindow(parallelRequests)
 
     private val circuitBreakerConfig = CircuitBreakerConfig.custom()
-        .failureRateThreshold(50F)
-        .slowCallRateThreshold(50F)
-        .waitDurationInOpenState(Duration.ofSeconds(10))
-        .slowCallDurationThreshold(Duration.ofSeconds(1))
-        .permittedNumberOfCallsInHalfOpenState(40)
-        .minimumNumberOfCalls(20)
+        .failureRateThreshold(50F) // если > 50 % запросов упали: OPEN
+        .slowCallRateThreshold(50F) // если > 50 % запросов медленные: OPEN
+        .waitDurationInOpenState(Duration.ofSeconds(10)) // OPEN держится 10с
+        .slowCallDurationThreshold(Duration.ofSeconds(1)) // если запрос > 1 секунды считаем его медленным
+        .permittedNumberOfCallsInHalfOpenState(40) // сколько запросов можно пустить для проверки в состоянии HALF-OPEN
+        .minimumNumberOfCalls(20) // пока не накопится 20 вызовов ничего не делаем
         .build()
 
     private val circuitBreaker = CircuitBreaker.of("paymentService", circuitBreakerConfig)

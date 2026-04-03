@@ -7,28 +7,22 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
@@ -45,7 +39,6 @@ class PaymentExternalSystemAdapterImpl(
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
-        val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -66,11 +59,12 @@ class PaymentExternalSystemAdapterImpl(
     private val ongoingWindow = OngoingWindow(parallelRequests)
 
     private val circuitBreakerConfig = CircuitBreakerConfig.custom()
-        .failureRateThreshold(8F)
-        .slowCallRateThreshold(8F)
+        .failureRateThreshold(50F)
+        .slowCallRateThreshold(50F)
         .waitDurationInOpenState(Duration.ofSeconds(10))
         .slowCallDurationThreshold(Duration.ofSeconds(1))
         .permittedNumberOfCallsInHalfOpenState(40)
+        .minimumNumberOfCalls(20)
         .build()
 
     private val circuitBreaker = CircuitBreaker.of("paymentService", circuitBreakerConfig)
@@ -95,8 +89,6 @@ class PaymentExternalSystemAdapterImpl(
     private val retryCount = 3
     private val maxDelay = 1000L
     private val baseDelay = 200L
-    private val hedgeCount = 3
-    private val hedgeDelay = 100L
     private val requestTimeout = 1500L
 
     override suspend fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -145,9 +137,6 @@ class PaymentExternalSystemAdapterImpl(
         var attempt = 0
         var processed = false
 
-        val futures = mutableListOf<CompletableFuture<HttpResponse<String>>>()
-        futures.add(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
-
         try {
             while (!processed && attempt < retryCount && now() < deadline) {
                 attempt++
@@ -157,18 +146,17 @@ class PaymentExternalSystemAdapterImpl(
                     if (remainingTime <= 0) break
 
                     val start = System.currentTimeMillis()
-                    val response = hedgedRequest(
-                        client = client,
-                        request = request,
-                        hedgeCount = hedgeCount,
-                        hedgeDelayMs = hedgeDelay,
-                        timeoutMs = remainingTime
-                    )
+
+                    val response = withContext(Dispatchers.IO) {
+                        withTimeoutOrNull(minOf(requestTimeout, remainingTime)) {
+                            client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                        }
+                    }
 
                     if (response == null) {
                         logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId, attempt: $attempt")
+                        circuitBreaker.onError(remainingTime, TimeUnit.MILLISECONDS, Exception("Request timeout"))
                         if (attempt >= retryCount || now() >= deadline) {
-                            circuitBreaker.onError(remainingTime, TimeUnit.MILLISECONDS, Exception("Request timeout"))
                             paymentESService.update(paymentId) {
                                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                             }
@@ -210,14 +198,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 } catch (e: Exception) {
                     circuitBreaker.onError(0, TimeUnit.MILLISECONDS, e)
-                    when (e.cause) {
-                        is SocketTimeoutException -> {
-                            logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
-                        }
-                        else -> {
-                            logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
-                        }
-                    }
+                    logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, reason = e.message)
                     }
@@ -243,40 +224,6 @@ class PaymentExternalSystemAdapterImpl(
 
     private fun exponentialBackoffDelay(attempt: Int): Long {
         return minOf((baseDelay * 2.0.pow((attempt - 1).toDouble())).toLong(), maxDelay)
-    }
-
-    suspend fun hedgedRequest(
-        client: HttpClient,
-        request: HttpRequest,
-        hedgeCount: Int,
-        hedgeDelayMs: Long,
-        timeoutMs: Long
-    ): HttpResponse<String>? = coroutineScope {
-        val winner = CompletableDeferred<HttpResponse<String>?>()
-
-        val jobs = (0 until hedgeCount).map { hedgeIndex ->
-            async(Dispatchers.IO) {
-                delay(hedgeIndex * hedgeDelayMs)
-
-                if (winner.isCompleted) return@async
-
-                try {
-                    val response = withTimeout(timeoutMs) {
-                        client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
-                    }
-                    winner.complete(response)
-                } catch (e: Exception) {
-                    if (hedgeIndex == hedgeCount - 1 && !winner.isCompleted) {
-                        winner.complete(null)
-                    }
-                }
-            }
-        }
-        val result = withTimeoutOrNull(timeoutMs) {
-            winner.await()
-        }
-        jobs.forEach { it.cancel() }
-        result
     }
 }
 
